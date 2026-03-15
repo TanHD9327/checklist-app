@@ -62,18 +62,16 @@ KV = '''
         padding: [0, 0, 0, "10dp"] 
         MDTextField:
             id: task_input
-            hint_text: app.lang_strings.get('hint_text', 'Việc cần làm...')
+            hint_text: app.lang_strings.get('hint_text', 'Task')
             mode: "rectangle"
-            # helper_text chỉ hiện khi error=True
-            helper_text: "Yêu cầu nội dung"
+            helper_text: "Required"
             helper_text_mode: "on_error"
-            # Tự động tắt lỗi khi người dùng bắt đầu gõ lại
             on_text: self.error = False
     MDBoxLayout:
         adaptive_height: True
         spacing: "15dp"
         MDRaisedButton:
-            text: app.lang_strings.get('pick_date', 'CHỌN NGÀY')
+            text: app.lang_strings.get('pick_date', 'DATE')
             on_release: app.show_date_picker()
         MDLabel:
             id: date_label
@@ -115,7 +113,7 @@ MDScreen:
         orientation: 'vertical'
         MDTopAppBar:
             id: toolbar
-            title: app.lang_strings.get('title', 'Ghi chú')
+            title: app.lang_strings.get('title', 'Checklist')
             elevation: 4
             right_action_items: [["cog", lambda x: app.show_settings_menu()]]
         
@@ -132,14 +130,12 @@ MDScreen:
         on_release: app.show_task_dialog()
 '''
 
-# --- CLASSES HỖ TRỢ ---
+# Các Class phụ trợ giữ nguyên logic từ bản trước...
 class RightCheckbox(IRightBodyTouch, MDCheckbox):
     task_id = NumericProperty(None)
     def on_release(self): MDApp.get_running_app().mark_task(self, self.active)
 
-class ListItemWithCheckbox(TwoLineAvatarIconListItem):
-    db_id = NumericProperty(None)
-
+class ListItemWithCheckbox(TwoLineAvatarIconListItem): db_id = NumericProperty(None)
 class LeftCheckbox(ILeftBodyTouch, MDCheckbox): pass
 
 class ColorField(Widget):
@@ -166,15 +162,15 @@ class ColorField(Widget):
         self.bind(hue=self._update_shader_hue)
     def _update(self, *args): self.rect.size, self.rect.pos = self.size, self.pos
     def _update_shader_hue(self, *args): self.canvas['hue'] = float(self.hue)
-    def on_touch_down(self, t):
-        if self.collide_point(*t.pos): self.update_c(t); return True
-    def on_touch_move(self, t):
-        if self.collide_point(*t.pos): self.update_c(t); return True
     def update_c(self, t):
         s = (t.x - self.x)/self.width
         v = 1.0 - (t.y - self.y)/self.height
         rgb = list(colorsys.hsv_to_rgb(self.hue, max(0,min(1,s)), max(0,min(1,v)))) + [1]
         MDApp.get_running_app().update_live_ui(rgb)
+    def on_touch_down(self, t):
+        if self.collide_point(*t.pos): self.update_c(t); return True
+    def on_touch_move(self, t):
+        if self.collide_point(*t.pos): self.update_c(t); return True
 
 class HueSlider(Widget):
     def __init__(self, **kwargs):
@@ -192,14 +188,13 @@ class HueSlider(Widget):
         with self.canvas: self.rect = Rectangle()
         super().__init__(**kwargs)
         self.bind(size=self._update, pos=self._update)
-    def _update(self, *args): self.rect.size, self.rect.pos = self.size, self.pos
+    def update_h(self, t):
+        h = max(0, min(1, (t.y - self.y)/self.height))
+        MDApp.get_running_app().color_content.ids.color_field.hue = h
     def on_touch_down(self, t):
         if self.collide_point(*t.pos): self.update_h(t); return True
     def on_touch_move(self, t):
         if self.collide_point(*t.pos): self.update_h(t); return True
-    def update_h(self, t):
-        h = max(0, min(1, (t.y - self.y)/self.height))
-        MDApp.get_running_app().color_content.ids.color_field.hue = h
 
 class SettingListContent(MDBoxLayout): pass
 class CustomColorContent(MDBoxLayout): pass
@@ -220,27 +215,17 @@ class ChecklistApp(MDApp):
         self.load_tasks()
 
     def init_db(self):
-        db_path = os.path.join(self.user_data_dir, "checklist_pro.db")
+        # Đường dẫn an toàn trên Android
+        db_path = os.path.join(self.user_data_dir, "checklist_final_v43.db")
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.cursor = self.conn.cursor()
-        
-        # Tạo bảng nếu chưa có
-        self.cursor.execute('''CREATE TABLE IF NOT EXISTS tasks 
-            (id INTEGER PRIMARY KEY AUTOINCREMENT, 
-             content TEXT, 
-             is_done INTEGER, 
-             task_time TEXT, 
-             task_date TEXT, 
-             done_timestamp TEXT)''')
-
-        # KIỂM TRA VÀ THÊM CỘT done_timestamp NẾU THIẾU (Dành cho DB cũ)
-        self.cursor.execute("PRAGMA table_info(tasks)")
-        columns = [column[1] for column in self.cursor.fetchall()]
-        if 'done_timestamp' not in columns:
-            self.cursor.execute("ALTER TABLE tasks ADD COLUMN done_timestamp TEXT DEFAULT ''")
-            
-        # Các cài đặt khác giữ nguyên...
+        self.cursor.execute('''CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, content TEXT, is_done INTEGER, task_time TEXT, task_date TEXT, done_timestamp TEXT)''')
         self.cursor.execute('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)')
+        
+        # MẶC ĐỊNH LÀ ENGLISH
+        default_settings = [('lang', 'English'), ('theme', 'Light'), ('color', '#3F51B5'), ('format', '24')]
+        for k, v in default_settings:
+            self.cursor.execute("INSERT OR IGNORE INTO settings VALUES (?, ?)", (k, v))
         self.conn.commit()
 
     def get_sort_time(self, t_time):
@@ -254,10 +239,7 @@ class ChecklistApp(MDApp):
     def load_tasks(self, *args):
         container = self.root.ids.container
         container.clear_widgets()
-        
-        # Sắp xếp theo thứ tự ưu tiên: 1.Trống, 2.Giờ, 3.Ngày, 4.Cả hai
         g1, g2, g3, g4, g_arch = [], [], [], [], []
-
         self.cursor.execute("SELECT * FROM tasks")
         for row in self.cursor.fetchall():
             _, _, is_done, t_time, t_date, _ = row
@@ -266,19 +248,15 @@ class ChecklistApp(MDApp):
             elif not t_date and t_time: g2.append(row)
             elif t_date and not t_time: g3.append(row)
             else: g4.append(row)
-
         g2.sort(key=lambda x: self.get_sort_time(x[3]))
         g3.sort(key=lambda x: datetime.strptime(x[4], "%d/%m/%Y"))
         g4.sort(key=lambda x: (datetime.strptime(x[4], "%d/%m/%Y"), self.get_sort_time(x[3])))
-
-        for r in g1 + g2 + g3 + g4:
-            self.add_item_ui(r, container)
-
+        for r in g1 + g2 + g3 + g4: self.add_item_ui(r, container)
         if g_arch:
-            content_box = MDBoxLayout(orientation="vertical", adaptive_height=True)
-            for r in g_arch: self.add_item_ui(r, content_box)
+            cb = MDBoxLayout(orientation="vertical", adaptive_height=True)
+            for r in g_arch: self.add_item_ui(r, cb)
             header = MDExpansionPanelOneLine(text=self.lang_strings.get('archive'))
-            container.add_widget(MDExpansionPanel(icon="archive-outline", content=content_box, panel_cls=header))
+            container.add_widget(MDExpansionPanel(icon="archive-outline", content=cb, panel_cls=header))
 
     def add_item_ui(self, row, container):
         t_id, content, is_done, t_time, t_date, _ = row
@@ -293,86 +271,75 @@ class ChecklistApp(MDApp):
         container.add_widget(item)
 
     def save_task(self, *args):
-        # Kiểm tra nội dung
+        self.dialog_content.ids.task_input.error = False
         content = self.dialog_content.ids.task_input.text.strip()
         if not content:
             self.dialog_content.ids.task_input.error = True
             return
-
-        # Kiểm tra thời gian
-        h_val = self.dialog_content.ids.hour_input.text.strip()
-        m_val = self.dialog_content.ids.min_input.text.strip()
+        h_val, m_val = self.dialog_content.ids.hour_input.text.strip(), self.dialog_content.ids.min_input.text.strip()
         t_str = ""
-
         if h_val or m_val:
             try:
                 h, m = int(h_val or 0), int(m_val or 0)
-                is_valid = True
+                valid = True
                 if self.is_24h_mode and (h < 0 or h > 23):
                     self.dialog_content.ids.hour_input.error = True
-                    self.dialog_content.ids.hour_input.helper_text = "0 - 23"
-                    is_valid = False
+                    self.dialog_content.ids.hour_input.helper_text = "0-23"; valid = False
                 elif not self.is_24h_mode and (h < 1 or h > 12):
                     self.dialog_content.ids.hour_input.error = True
-                    self.dialog_content.ids.hour_input.helper_text = "1 - 12"
-                    is_valid = False
+                    self.dialog_content.ids.hour_input.helper_text = "1-12"; valid = False
                 if m < 0 or m > 59:
                     self.dialog_content.ids.min_input.error = True
-                    self.dialog_content.ids.min_input.helper_text = "0 - 59"
-                    is_valid = False
-                
-                if not is_valid: return
+                    self.dialog_content.ids.min_input.helper_text = "0-59"; valid = False
+                if not valid: return
                 t_str = f"{str(h).zfill(2)}:{str(m).zfill(2)}"
                 if not self.is_24h_mode: t_str += f" {self.dialog_content.ids.am_pm_button.text}"
             except: return
-
-        if self.editing_id:
-            self.cursor.execute("UPDATE tasks SET content=?, task_time=?, task_date=? WHERE id=?", (content, t_str, self.selected_date, self.editing_id))
-        else:
-            self.cursor.execute("INSERT INTO tasks (content, is_done, task_time, task_date, done_timestamp) VALUES (?, 0, ?, ?, '')", (content, t_str, self.selected_date))
-        self.conn.commit()
-        self.load_tasks()
-        self.task_dialog.dismiss()
+        if self.editing_id: self.cursor.execute("UPDATE tasks SET content=?, task_time=?, task_date=? WHERE id=?", (content, t_str, self.selected_date, self.editing_id))
+        else: self.cursor.execute("INSERT INTO tasks (content, is_done, task_time, task_date, done_timestamp) VALUES (?, 0, ?, ?, '')", (content, t_str, self.selected_date))
+        self.conn.commit(); self.load_tasks(); self.task_dialog.dismiss()
 
     def mark_task(self, checkbox, active):
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S") if active else ""
         self.cursor.execute("UPDATE tasks SET is_done=?, done_timestamp=? WHERE id=?", (1 if active else 0, ts, checkbox.task_id))
         self.conn.commit()
-        list_item = checkbox.parent.parent
-        content = list_item.text.replace("[s]", "").replace("[/s]", "")
-        list_item.text = f"[s]{content}[/s]" if active else content
-        list_item.theme_text_color = "Hint" if active else "Primary"
+        self.load_tasks()
 
     def delete_task(self, i):
-        self.cursor.execute("DELETE FROM tasks WHERE id=?", (i,))
-        self.conn.commit()
-        self.load_tasks()
+        self.cursor.execute("DELETE FROM tasks WHERE id=?", (i,)); self.conn.commit(); self.load_tasks()
 
     def load_settings(self):
         self.cursor.execute("SELECT value FROM settings WHERE key='lang'")
-        res = self.cursor.fetchone()
-        lang = res[0] if res else "Vietnamese"
+        lang = self.cursor.fetchone()[0]
         LANG_DATA = {
             "English": {"title": "Checklist", "archive": "Archive Box", "hint_text": "Task...", "add": "SAVE", "cancel": "CANCEL", "settings": "Settings", "lang_opt": "Language", "theme_opt": "Theme", "color_opt": "App Color", "format_opt": "Format", "pick_date": "DATE"},
             "Vietnamese": {"title": "Ghi chú", "archive": "Hòm lưu trữ", "hint_text": "Việc cần làm...", "add": "LƯU", "cancel": "HỦY", "settings": "Cài đặt", "lang_opt": "Ngôn ngữ", "theme_opt": "Giao diện", "color_opt": "Màu ứng dụng", "format_opt": "Định dạng", "pick_date": "CHỌN NGÀY"}
         }
         self.lang_strings = LANG_DATA.get(lang)
         self.root.ids.toolbar.title = self.lang_strings.get('title')
+        
         self.cursor.execute("SELECT value FROM settings WHERE key='theme'")
-        res = self.cursor.fetchone()
-        if res: self.theme_cls.theme_style = res[0]
+        self.theme_cls.theme_style = self.cursor.fetchone()[0]
+        
         self.cursor.execute("SELECT value FROM settings WHERE key='color'")
-        res = self.cursor.fetchone()
-        if res: self.apply_ui_color(res[0])
+        self.apply_ui_color(self.cursor.fetchone()[0])
+        
         self.cursor.execute("SELECT value FROM settings WHERE key='format'")
-        res = self.cursor.fetchone()
-        self.is_24h_mode = (res[0] == "24") if res else True
+        self.is_24h_mode = (self.cursor.fetchone()[0] == "24")
 
     def apply_ui_color(self, hex_c):
         c = get_color_from_hex(hex_c)
         if self.root:
             self.root.ids.toolbar.md_bg_color = c
             self.root.ids.fab.md_bg_color = c
+
+    def update_setting(self, mode, val):
+        db_k = 'lang' if mode=='lang' else 'theme' if mode=='theme' else 'format'
+        self.cursor.execute(f"UPDATE settings SET value=? WHERE key=?", (val, db_k))
+        self.conn.commit()
+        self.sub_dialog.dismiss()
+        self.load_settings()
+        self.load_tasks()
 
     def show_task_dialog(self, task_id=None, current_text="", current_time="", current_date=""):
         self.editing_id = task_id; self.selected_date = current_date
@@ -402,17 +369,11 @@ class ChecklistApp(MDApp):
     def refresh_sub_list(self, mode):
         container = self.setting_content.ids.list_container; container.clear_widgets()
         db_k = 'lang' if mode=='lang' else 'theme' if mode=='theme' else 'format'
-        self.cursor.execute("SELECT value FROM settings WHERE key=?", (db_k,)); res = self.cursor.fetchone()
-        curr = res[0] if res else ""
+        self.cursor.execute("SELECT value FROM settings WHERE key=?", (db_k,)); curr = self.cursor.fetchone()[0]
         opts = [("Tiếng Việt", "Vietnamese"), ("English", "English")] if mode=="lang" else [("Light", "Light"), ("Dark", "Dark")] if mode=="theme" else [("12h", "12"), ("24h", "24")]
         for txt, k in opts:
             item = OneLineAvatarIconListItem(text=txt, on_release=lambda x, m=mode, val=k: self.update_setting(m, val))
             item.add_widget(LeftCheckbox(group="g", active=(curr == k))); container.add_widget(item)
-
-    def update_setting(self, mode, val):
-        db_k = 'lang' if mode=='lang' else 'theme' if mode=='theme' else 'format'
-        self.cursor.execute(f"UPDATE settings SET value='{val}' WHERE key='{db_k}'"); self.conn.commit()
-        self.sub_dialog.dismiss(); self.load_settings(); self.load_tasks()
 
     def open_pro_color_picker(self, *args):
         self.settings_dialog.dismiss(); self.color_content = CustomColorContent()
