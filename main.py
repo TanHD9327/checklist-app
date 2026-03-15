@@ -53,7 +53,6 @@ KV = '''
 <ItemConfirm>:
     orientation: "vertical"
     spacing: "15dp"         
-    # Tăng padding top lên 25dp để đẩy hẳn chữ Task xuống, không bị mép Dialog che
     padding: [0, "25dp", 0, "15dp"] 
     adaptive_height: True   
 
@@ -64,7 +63,7 @@ KV = '''
         MDTextField:
             id: task_input
             hint_text: app.lang_strings.get('hint_text', 'Task')
-            mode: "rectangle"        # Đổi lại thành rectangle để tránh lỗi version
+            mode: "rectangle"
             helper_text_mode: "on_error"
             on_text: self.error = False
     
@@ -88,7 +87,7 @@ KV = '''
         MDTextField:
             id: hour_input
             hint_text: "HH"
-            mode: "rectangle"        # Đổi lại thành rectangle
+            mode: "rectangle"
             input_filter: "int"
             max_text_length: 2
             helper_text_mode: "on_error"
@@ -103,7 +102,7 @@ KV = '''
         MDTextField:
             id: min_input
             hint_text: "MM"
-            mode: "rectangle"        # Đổi lại thành rectangle
+            mode: "rectangle"
             input_filter: "int"
             max_text_length: 2
             helper_text_mode: "on_error"
@@ -138,7 +137,6 @@ MDScreen:
         on_release: app.show_task_dialog()
 '''
 
-# --- PHẦN CLASS GIỮ NGUYÊN ---
 class LeftCheckbox(ILeftBodyTouch, MDCheckbox): pass
 class RightCheckbox(IRightBodyTouch, MDCheckbox):
     task_id = NumericProperty(None)
@@ -220,13 +218,13 @@ class ChecklistApp(MDApp):
         "English": {
             "title": "Checklist", "hint_text": "Task...", "add": "SAVE", "cancel": "CANCEL", 
             "settings": "Settings", "lang_opt": "Language", "theme_opt": "Theme", 
-            "color_opt": "App Color", "format_opt": "Format", "pick_date": "DATE",
-            "err_empty": "Vui lòng nhập nội dung", "err_past": "Thời gian đã trôi qua"
+            "color_opt": "App Color", "format_opt": "Time Format", "pick_date": "DATE",
+            "err_empty": "Content cannot be empty", "err_past": "Time has passed"
         },
         "Vietnamese": {
             "title": "Ghi chú", "hint_text": "Việc cần làm...", "add": "LƯU", "cancel": "HỦY", 
             "settings": "Cài đặt", "lang_opt": "Ngôn ngữ", "theme_opt": "Giao diện", 
-            "color_opt": "Màu ứng dụng", "format_opt": "Định dạng", "pick_date": "CHỌN NGÀY",
+            "color_opt": "Màu ứng dụng", "format_opt": "Định dạng giờ", "pick_date": "CHỌN NGÀY",
             "err_empty": "Vui lòng nhập nội dung", "err_past": "Thời gian đã trôi qua"
         }
     }
@@ -249,17 +247,22 @@ class ChecklistApp(MDApp):
         self.cursor = self.conn.cursor()
         self.cursor.execute('CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, content TEXT, is_done INTEGER, task_time TEXT, task_date TEXT)')
         self.cursor.execute('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)')
-        for k, v in [('lang', 'Vietnamese'), ('theme', 'Light'), ('color', '#3F51B5'), ('format', '24')]:
+        # ĐẶT MẶC ĐỊNH LÀ ENGLISH Ở ĐÂY
+        for k, v in [('lang', 'English'), ('theme', 'Light'), ('color', '#3F51B5'), ('format', '24')]:
             self.cursor.execute("INSERT OR IGNORE INTO settings VALUES (?, ?)", (k, v))
         self.conn.commit()
 
     def load_settings(self):
         self.cursor.execute("SELECT value FROM settings WHERE key='lang'")
-        self.lang_strings = self.LANG_DATA.get(self.cursor.fetchone()[0], self.LANG_DATA["Vietnamese"])
+        lang_val = self.cursor.fetchone()[0]
+        self.lang_strings = self.LANG_DATA.get(lang_val, self.LANG_DATA["English"])
+        
         self.cursor.execute("SELECT value FROM settings WHERE key='theme'")
         self.theme_cls.theme_style = self.cursor.fetchone()[0]
+        
         self.cursor.execute("SELECT value FROM settings WHERE key='color'")
         self.apply_ui_color(self.cursor.fetchone()[0])
+        
         self.cursor.execute("SELECT value FROM settings WHERE key='format'")
         self.is_24h_mode = (self.cursor.fetchone()[0] == "24")
 
@@ -311,9 +314,7 @@ class ChecklistApp(MDApp):
         task_f = self.dialog_content.ids.task_input
         hour_f = self.dialog_content.ids.hour_input
         min_f = self.dialog_content.ids.min_input
-        
         task_f.error = hour_f.error = min_f.error = False
-        
         content = task_f.text.strip()
         h_text, m_text = hour_f.text.strip(), min_f.text.strip()
         
@@ -327,16 +328,11 @@ class ChecklistApp(MDApp):
                 h = int(h_text) if h_text else 0
                 m = int(m_text) if m_text else 0
                 has_error = False
-
                 if self.is_24h_mode:
-                    if not (0 <= h <= 23):
-                        hour_f.helper_text = "0-23"; hour_f.error = has_error = True
+                    if not (0 <= h <= 23): hour_f.helper_text = "0-23"; hour_f.error = has_error = True
                 else:
-                    if not (1 <= h <= 12):
-                        hour_f.helper_text = "1-12"; hour_f.error = has_error = True
-
-                if not (0 <= m <= 59):
-                    min_f.helper_text = "0-59"; min_f.error = has_error = True
+                    if not (1 <= h <= 12): hour_f.helper_text = "1-12"; hour_f.error = has_error = True
+                if not (0 <= m <= 59): min_f.helper_text = "0-59"; min_f.error = has_error = True
                 
                 if not has_error:
                     if not final_date: final_date = datetime.now().strftime("%d/%m/%Y")
@@ -350,7 +346,6 @@ class ChecklistApp(MDApp):
                         if h_24 < now.hour or (h_24 == now.hour and m < now.minute):
                             hour_f.helper_text = self.lang_strings['err_past']
                             hour_f.error = min_f.error = has_error = True
-
                 if has_error: return
                 time_str = f"{str(h).zfill(2)}:{str(m).zfill(2)}"
                 if not self.is_24h_mode: time_str += f" {self.dialog_content.ids.am_pm_button.text}"
@@ -361,7 +356,6 @@ class ChecklistApp(MDApp):
             self.cursor.execute("UPDATE tasks SET content=?, task_time=?, task_date=? WHERE id=?", (content, time_str, final_date, self.editing_id))
         else:
             self.cursor.execute("INSERT INTO tasks (content, is_done, task_time, task_date) VALUES (?, 0, ?, ?)", (content, time_str, final_date))
-        
         self.conn.commit(); self.load_tasks(); self.task_dialog.dismiss(); self.selected_date = ""
 
     def show_settings_menu(self, *args):
@@ -382,6 +376,8 @@ class ChecklistApp(MDApp):
         container = self.setting_content.ids.list_container; container.clear_widgets()
         db_k = 'lang' if mode=='lang' else 'theme' if mode=='theme' else 'format'
         self.cursor.execute("SELECT value FROM settings WHERE key=?", (db_k,)); curr = self.cursor.fetchone()[0]
+        
+        # Tên hiển thị ngôn ngữ chuẩn
         opts = [("Tiếng Việt", "Vietnamese"), ("English", "English")] if mode=="lang" else [("Light", "Light"), ("Dark", "Dark")] if mode=="theme" else [("12h", "12"), ("24h", "24")]
         for txt, k in opts:
             item = OneLineAvatarIconListItem(text=txt, on_release=lambda x, m=mode, val=k: self.update_setting(m, val))
